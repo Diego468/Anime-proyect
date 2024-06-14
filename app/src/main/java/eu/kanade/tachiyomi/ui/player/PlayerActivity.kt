@@ -51,6 +51,7 @@ import eu.kanade.tachiyomi.data.notification.NotificationReceiver
 import eu.kanade.tachiyomi.data.notification.Notifications
 import eu.kanade.tachiyomi.databinding.PlayerActivityBinding
 import eu.kanade.tachiyomi.ui.base.activity.BaseActivity
+import eu.kanade.tachiyomi.ui.player.controls.PlayerControls
 import eu.kanade.tachiyomi.ui.player.settings.PlayerPreferences
 import eu.kanade.tachiyomi.ui.player.settings.PlayerSettingsScreenModel
 import eu.kanade.tachiyomi.ui.player.settings.dialogs.EpisodeListDialog
@@ -75,6 +76,7 @@ import eu.kanade.tachiyomi.ui.player.viewer.PictureInPictureHandler
 import eu.kanade.tachiyomi.ui.player.viewer.PipState
 import eu.kanade.tachiyomi.ui.player.viewer.SeekState
 import eu.kanade.tachiyomi.ui.player.viewer.SetAsCover
+import eu.kanade.tachiyomi.ui.player.viewer.VideoDebanding
 import eu.kanade.tachiyomi.util.AniSkipApi
 import eu.kanade.tachiyomi.util.SkipType
 import eu.kanade.tachiyomi.util.Stamp
@@ -157,9 +159,7 @@ class PlayerActivity : BaseActivity() {
         viewModel.saveCurrentEpisodeWatchingProgress()
 
         lifecycleScope.launchNonCancellable {
-            viewModel.mutableState.update {
-                it.copy(isLoadingEpisode = true)
-            }
+            viewModel.mutableState.update { it.copy(isLoadingEpisode = true) }
 
             val initResult = viewModel.init(animeId, episodeId, vidList, vidIndex)
             if (!initResult.second.getOrDefault(false)) {
@@ -280,14 +280,9 @@ class PlayerActivity : BaseActivity() {
 
     private var hadPreviousAudio = false
 
-    private var videoChapters: List<VideoChapter> = emptyList()
-        set(value) {
-            field = value
-            runOnUiThread {
-                playerControls.seekbar.updateSeekbar(chapters = value)
-                playerControls.chapterText.updateCurrentChapterText(chapters = value)
-            }
-        }
+    private var videoChapters
+        get() = viewModel.state.value.videoChapters
+        set(value) { viewModel.mutableState.update { it.copy(videoChapters = value) } }
 
     override fun dispatchTouchEvent(ev: MotionEvent?): Boolean {
         playerControls.resetControlsFade()
@@ -518,6 +513,12 @@ class PlayerActivity : BaseActivity() {
             }
         }
 
+        binding.controlsRoot.setComposeContent {
+            val state by viewModel.state.collectAsState()
+            viewModel.onSecondReached(state.timeData.position, state.timeData.duration)
+            PlayerControls(activity = this)
+        }
+
         playerIsDestroyed = false
 
         registerReceiver(
@@ -562,7 +563,7 @@ class PlayerActivity : BaseActivity() {
         }
 
         if (playerPreferences.defaultIntroLength().get() == 0) {
-            playerControls.binding.controlsSkipIntroBtn.visibility = View.GONE
+            // TODO: A
         }
 
         refreshUi()
@@ -572,7 +573,6 @@ class PlayerActivity : BaseActivity() {
         } else {
             playerControls.showAndFadeControls()
         }
-        playerControls.toggleAutoplay(playerPreferences.autoplayEnabled().get())
     }
 
     private fun setupPlayerMPV() {
@@ -610,11 +610,12 @@ class PlayerActivity : BaseActivity() {
         MPVLib.setOptionString("keep-open", "always")
         MPVLib.setOptionString("ytdl", "no")
 
-        MPVLib.setOptionString("hwdec", playerPreferences.hwDec().get())
-        when (playerPreferences.deband().get()) {
-            1 -> MPVLib.setOptionString("vf", "gradfun=radius=12")
-            2 -> MPVLib.setOptionString("deband", "yes")
-            3 -> MPVLib.setOptionString("vf", "format=yuv420p")
+        MPVLib.setOptionString("hwdec", playerPreferences.hardwareDecoding().get().mpvValue)
+        when (playerPreferences.videoDebanding().get()) {
+            VideoDebanding.CPU -> MPVLib.setOptionString("vf", "gradfun=radius=12")
+            VideoDebanding.GPU -> MPVLib.setOptionString("deband", "yes")
+            VideoDebanding.YUV420P -> MPVLib.setOptionString("vf", "format=yuv420p")
+            VideoDebanding.DISABLED -> {}
         }
 
         val currentPlayerStatisticsPage = playerPreferences.playerStatisticsPage().get()
@@ -882,10 +883,8 @@ class PlayerActivity : BaseActivity() {
         AspectState.mode = if (aspectProperty != -1.0 && aspectProperty != (deviceWidth / deviceHeight).toDouble()) {
             AspectState.CUSTOM
         } else {
-            AspectState.get(playerPreferences.playerViewMode().get())
+            playerPreferences.aspectState().get()
         }
-
-        playerControls.setViewMode(showText = false)
     }
 
     private fun pauseForDialogSheet(fadeControls: Boolean = false): () -> Unit {
@@ -1013,35 +1012,9 @@ class PlayerActivity : BaseActivity() {
                 if (deviceWidth <= deviceHeight) {
                     deviceWidth = deviceHeight.also { deviceHeight = deviceWidth }
                 }
-
-                playerControls.binding.episodeListBtn.updateLayoutParams<ConstraintLayout.LayoutParams> {
-                    rightToLeft = playerControls.binding.toggleAutoplay.id
-                    rightToRight = ConstraintLayout.LayoutParams.UNSET
-                }
-                playerControls.binding.settingsBtn.updateLayoutParams<ConstraintLayout.LayoutParams> {
-                    topToTop = ConstraintLayout.LayoutParams.PARENT_ID
-                    topToBottom = ConstraintLayout.LayoutParams.UNSET
-                }
-                playerControls.binding.toggleAutoplay.updateLayoutParams<ConstraintLayout.LayoutParams> {
-                    leftToLeft = ConstraintLayout.LayoutParams.UNSET
-                    leftToRight = playerControls.binding.episodeListBtn.id
-                }
             } else {
                 if (deviceWidth >= deviceHeight) {
                     deviceWidth = deviceHeight.also { deviceHeight = deviceWidth }
-                }
-
-                playerControls.binding.episodeListBtn.updateLayoutParams<ConstraintLayout.LayoutParams> {
-                    rightToLeft = ConstraintLayout.LayoutParams.UNSET
-                    rightToRight = ConstraintLayout.LayoutParams.PARENT_ID
-                }
-                playerControls.binding.settingsBtn.updateLayoutParams<ConstraintLayout.LayoutParams> {
-                    topToTop = ConstraintLayout.LayoutParams.UNSET
-                    topToBottom = playerControls.binding.episodeListBtn.id
-                }
-                playerControls.binding.toggleAutoplay.updateLayoutParams<ConstraintLayout.LayoutParams> {
-                    leftToLeft = ConstraintLayout.LayoutParams.PARENT_ID
-                    leftToRight = ConstraintLayout.LayoutParams.UNSET
                 }
             }
             setupGestures()
@@ -1112,7 +1085,6 @@ class PlayerActivity : BaseActivity() {
     internal fun showLoadingIndicator(visible: Boolean) {
         viewModel.viewModelScope.launchUI {
             binding.loadingIndicator.isVisible = visible
-            playerControls.binding.playBtn.isVisible = !visible
         }
     }
 
@@ -1122,9 +1094,8 @@ class PlayerActivity : BaseActivity() {
         showLoadingIndicator(position >= cachePosition && seeking)
     }
 
-    @Suppress("UNUSED_PARAMETER")
     @SuppressLint("SourceLockedOrientationActivity")
-    fun rotatePlayer(view: View) {
+    fun rotatePlayer() {
         if (this.resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT) {
             this.requestedOrientation = playerPreferences.defaultPlayerOrientationLandscape().get()
         } else {
@@ -1142,27 +1113,6 @@ class PlayerActivity : BaseActivity() {
     internal fun doubleTapPlayPause() {
         animationHandler.removeCallbacks(doubleTapPlayPauseRunnable)
         playerControls.playPause()
-
-        if (!playerControls.binding.unlockedView.isVisible) {
-            when {
-                player.paused!! -> {
-                    binding.playPauseView.setImageResource(R.drawable.ic_pause_64dp)
-                }
-
-                !player.paused!! -> {
-                    binding.playPauseView.setImageResource(R.drawable.ic_play_arrow_64dp)
-                }
-            }
-
-            AnimationUtils.loadAnimation(this, R.anim.player_fade_in).also { fadeAnimation ->
-                binding.playPauseView.startAnimation(fadeAnimation)
-                binding.playPauseView.visibility = View.VISIBLE
-            }
-
-            animationHandler.postDelayed(doubleTapPlayPauseRunnable, 500L)
-        } else {
-            binding.playPauseView.visibility = View.GONE
-        }
     }
 
     private lateinit var doubleTapBg: ImageView
@@ -1423,14 +1373,12 @@ class PlayerActivity : BaseActivity() {
         )
     }
 
-    @Suppress("UNUSED_PARAMETER")
-    fun cycleSpeed(view: View) {
+    fun cycleSpeed() {
         player.cycleSpeed()
         refreshUi()
     }
 
-    @Suppress("UNUSED_PARAMETER")
-    fun skipIntro(view: View) {
+    fun skipIntro() {
         if (skipType != null) {
             // this stops the counter
             if (waitingAniSkip > 0 && netflixStyle) {
@@ -1447,7 +1395,7 @@ class PlayerActivity : BaseActivity() {
                 )
             }
             AniSkipApi.PlayerUtils(binding, aniSkipInterval!!).skipAnimation(skipType!!)
-        } else if (playerControls.binding.controlsSkipIntroBtn.text != "") {
+        } else {
             doubleTapSeek(viewModel.getAnimeSkipIntroLength(), isDoubleTap = false)
             playerControls.resetControlsFade()
         }
@@ -1459,14 +1407,16 @@ class PlayerActivity : BaseActivity() {
     internal fun refreshUi() {
         viewModel.viewModelScope.launchUI {
             setVisibilities()
-            player.timePos?.let { playerControls.updatePlaybackPos(it) }
-            player.duration?.let { playerControls.updatePlaybackDuration(it) }
             updatePlaybackStatus(player.paused ?: return@launchUI)
             updatePip(start = false)
-            playerControls.updateEpisodeText()
-            playerControls.updatePlaylistButtons()
-            playerControls.updateSpeedButton()
             withIOContext { player.loadTracks() }
+            player.playbackSpeed?.let { playerPreferences.playerSpeed().set(it.toFloat()) }
+            viewModel.updateSkipIntroText(
+                getString(
+                    R.string.player_controls_skip_intro_text,
+                    viewModel.getAnimeSkipIntroLength(),
+                )
+            )
         }
     }
 
@@ -1488,9 +1438,6 @@ class PlayerActivity : BaseActivity() {
     }
 
     private fun updatePlaybackStatus(paused: Boolean) {
-        val r = if (paused) R.drawable.ic_play_arrow_64dp else R.drawable.ic_pause_64dp
-        playerControls.binding.playBtn.setImageResource(r)
-
         if (paused) {
             window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         } else {
@@ -1608,7 +1555,6 @@ class PlayerActivity : BaseActivity() {
                             episode.last_second_seen
                         }
                     MPVLib.command(arrayOf("set", "start", "${resumePosition / 1000F}"))
-                    playerControls.updatePlaybackDuration(resumePosition.toInt() / 1000)
                 }
             } else {
                 player.timePos?.let {
@@ -1866,7 +1812,7 @@ class PlayerActivity : BaseActivity() {
 
     private var skipType: SkipType? = null
 
-    private suspend fun aniSkipStuff(position: Long) {
+    private fun aniSkipStuff(position: Long) {
         if (!aniSkipEnable) return
         // if it doesn't find any interval it will show the +85 button
         if (aniSkipInterval == null) return
@@ -1912,14 +1858,14 @@ class PlayerActivity : BaseActivity() {
 
     internal fun eventPropertyUi(property: String, value: Long) {
         when (property) {
-            "demuxer-cache-time" -> playerControls.updateBufferPosition(value.toInt())
+            "demuxer-cache-time" -> viewModel.updatePlayerTime(readAhead = value)
             "time-pos" -> {
-                playerControls.updatePlaybackPos(value.toInt())
+                viewModel.updatePlayerTime(position = value)
                 viewModel.viewModelScope.launchUI { aniSkipStuff(value) }
                 updatePlaybackState()
             }
             "duration" -> {
-                playerControls.updatePlaybackDuration(value.toInt())
+                viewModel.updatePlayerTime(duration = value)
                 mediaSession.isActive = true
                 updatePlaybackState()
             }
@@ -1939,6 +1885,7 @@ class PlayerActivity : BaseActivity() {
                     updatePlaybackStatus(value)
                     updatePlaybackState(pause = true)
                     refreshUi()
+                    viewModel.updatePlayerTime(paused = value)
                 }
             }
             "eof-reached" -> endFile(value)
