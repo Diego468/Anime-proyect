@@ -2,10 +2,10 @@ workflows:
   build:
     name: Build APK
     environment:
-      flutter: true  # Cambia a true si usas Flutter
+      flutter: true
     scripts:
       - name: Gradle build
         script: |
-          ./gradlew clean assembleDebug  # Cambia a assembleRelease si deseas una versión de lanzamiento
+          ./gradlew clean assembleRelease  # Cambia a assembleRelease si deseas una versión de lanzamiento
     artifacts:
       - app/build/outputs/apk/debug/*.apk  # Cambia según el tipo de APK que estés generando
