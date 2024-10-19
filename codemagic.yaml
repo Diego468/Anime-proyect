@@ -2,7 +2,7 @@ workflows:
   build:
     name: Build APK
     environment:
-      flutter: false  # Cambia a true si usas Flutter
+      flutter: true  # Cambia a true si usas Flutter
     scripts:
       - name: Gradle build
         script: |
